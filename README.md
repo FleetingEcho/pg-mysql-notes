@@ -3268,6 +3268,230 @@ MySQL维护管理员依赖的一系列日志文件。主要的日志文件有以
 
 
 
+## MySQL 8.x 新特性与语法更新
+
+> 以下内容为 MySQL 8.0+ 的新增或变更语法，对原书内容进行补充和修正。
+
+### 重要语法变更
+
+#### 1. REGEXP 大小写匹配（原书 BINARY 关键字已废弃）
+
+```sql
+-- 旧写法（MySQL 8.0 中已废弃）
+WHERE prod_name REGEXP BINARY 'JetPack .000';
+
+-- 新写法：使用 REGEXP_LIKE() 函数，'c' 表示区分大小写
+WHERE REGEXP_LIKE(prod_name, 'JetPack .000', 'c');
+
+-- REGEXP_LIKE / REGEXP_REPLACE / REGEXP_SUBSTR 是 MySQL 8.0 新增函数
+SELECT REGEXP_REPLACE('Hello World', 'World', 'MySQL');  -- Hello MySQL
+SELECT REGEXP_SUBSTR('abc123def', '[0-9]+');              -- 123
+```
+
+#### 2. 修改密码（Password() 函数已废弃）
+
+```sql
+-- 旧写法（已废弃）
+SET PASSWORD FOR bforta = Password('n3w p@$$w0rd');
+
+-- MySQL 8.0 新写法
+ALTER USER 'bforta'@'%' IDENTIFIED BY 'n3w p@$$w0rd';
+
+-- 修改当前用户密码
+ALTER USER USER() IDENTIFIED BY 'new_password';
+```
+
+#### 3. INT 显示宽度已废弃
+
+```sql
+-- 旧写法（MySQL 8.0.17 起废弃显示宽度）
+cust_id int(11) NOT NULL AUTO_INCREMENT,
+
+-- 新写法
+cust_id INT NOT NULL AUTO_INCREMENT,
+```
+
+#### 4. InnoDB 已支持全文本搜索（原书 MyISAM 限制已解除）
+
+```sql
+-- MySQL 5.6+ InnoDB 已支持 FULLTEXT，不再限于 MyISAM
+CREATE TABLE productnotes
+(
+    note_id   INT  NOT NULL AUTO_INCREMENT,
+    prod_id   CHAR(10) NOT NULL,
+    note_date DATETIME NOT NULL,
+    note_text TEXT NULL,
+    PRIMARY KEY(note_id),
+    FULLTEXT(note_text)
+) ENGINE=InnoDB;  -- 现在用 InnoDB 即可
+```
+
+### MySQL 8.0 新特性
+
+#### CTE（公用表表达式，WITH 子句）
+
+```sql
+-- 简单 CTE
+WITH order_summary AS (
+    SELECT cust_id, COUNT(*) AS order_count, SUM(item_price * quantity) AS total
+    FROM orders o
+    JOIN orderitems oi ON o.order_num = oi.order_num
+    GROUP BY cust_id
+)
+SELECT c.cust_name, os.order_count, os.total
+FROM customers c
+JOIN order_summary os ON c.cust_id = os.cust_id
+ORDER BY os.total DESC;
+
+-- 递归 CTE（用于层级数据）
+WITH RECURSIVE nums AS (
+    SELECT 1 AS n
+    UNION ALL
+    SELECT n + 1 FROM nums WHERE n < 10
+)
+SELECT n FROM nums;
+```
+
+#### 窗口函数（Window Functions）
+
+```sql
+-- ROW_NUMBER：为每行分配唯一序号
+SELECT prod_name, prod_price,
+       ROW_NUMBER() OVER (ORDER BY prod_price DESC) AS price_rank
+FROM products;
+
+-- RANK / DENSE_RANK：有并列时的排名（RANK 跳号，DENSE_RANK 不跳号）
+SELECT prod_name, vend_id, prod_price,
+       RANK() OVER (PARTITION BY vend_id ORDER BY prod_price DESC) AS rank_in_vendor,
+       DENSE_RANK() OVER (ORDER BY prod_price DESC) AS dense_rank_overall
+FROM products;
+
+-- LAG / LEAD：访问前一行/后一行的值
+SELECT order_num, order_date,
+       LAG(order_date) OVER (ORDER BY order_date) AS prev_order_date,
+       LEAD(order_date) OVER (ORDER BY order_date) AS next_order_date
+FROM orders;
+
+-- SUM() OVER：累计求和
+SELECT order_num, cust_id,
+       SUM(item_price * quantity) OVER (ORDER BY order_num) AS running_total
+FROM orders o
+JOIN orderitems oi ON o.order_num = oi.order_num;
+
+-- NTILE：将结果集分成 N 组
+SELECT prod_name, prod_price,
+       NTILE(4) OVER (ORDER BY prod_price) AS price_quartile
+FROM products;
+```
+
+#### JSON 数据类型
+
+```sql
+-- 创建含 JSON 列的表
+CREATE TABLE user_profiles (
+    id   INT NOT NULL AUTO_INCREMENT,
+    name VARCHAR(100) NOT NULL,
+    info JSON,
+    PRIMARY KEY(id)
+);
+
+-- 插入 JSON 数据
+INSERT INTO user_profiles(name, info)
+VALUES ('张三', '{"age": 28, "city": "Beijing", "tags": ["admin", "user"]}');
+
+-- 查询 JSON 字段（-> 返回 JSON，->> 返回字符串）
+SELECT name, info->'$.city' AS city_json, info->>'$.city' AS city_str
+FROM user_profiles;
+
+-- JSON_EXTRACT、JSON_SET、JSON_REMOVE
+SELECT JSON_EXTRACT(info, '$.age') AS age FROM user_profiles;
+
+UPDATE user_profiles
+SET info = JSON_SET(info, '$.age', 29)
+WHERE name = '张三';
+
+-- JSON_ARRAYAGG / JSON_OBJECTAGG（聚合为 JSON）
+SELECT vend_id, JSON_ARRAYAGG(prod_name) AS products
+FROM products
+GROUP BY vend_id;
+```
+
+#### GENERATED COLUMNS（生成列）
+
+```sql
+CREATE TABLE orderitems_ext (
+    order_num   INT NOT NULL,
+    order_item  INT NOT NULL,
+    quantity    INT NOT NULL,
+    item_price  DECIMAL(8,2) NOT NULL,
+    -- 虚拟生成列（不存储，查询时计算）
+    line_total  DECIMAL(10,2) GENERATED ALWAYS AS (quantity * item_price) VIRTUAL,
+    PRIMARY KEY (order_num, order_item)
+);
+```
+
+#### 角色管理（Roles）
+
+```sql
+-- 创建角色
+CREATE ROLE 'read_only', 'read_write';
+
+-- 为角色授权
+GRANT SELECT ON crashcourse.* TO 'read_only';
+GRANT SELECT, INSERT, UPDATE, DELETE ON crashcourse.* TO 'read_write';
+
+-- 将角色分配给用户
+GRANT 'read_only' TO 'bob'@'%';
+GRANT 'read_write' TO 'alice'@'%';
+
+-- 查看角色
+SHOW GRANTS FOR 'read_only';
+```
+
+#### LIMIT 与 OFFSET（推荐写法）
+
+```sql
+-- 旧写法（仍然有效）
+SELECT prod_name FROM products LIMIT 5, 10;  -- 跳过5行，取10行
+
+-- 推荐写法（更易读）
+SELECT prod_name FROM products LIMIT 10 OFFSET 5;
+```
+
+#### CHECK 约束（MySQL 8.0.16+ 真正生效）
+
+```sql
+CREATE TABLE products_new (
+    prod_id    CHAR(10) NOT NULL,
+    prod_price DECIMAL(8,2) NOT NULL,
+    quantity   INT NOT NULL,
+    CONSTRAINT chk_price CHECK (prod_price > 0),
+    CONSTRAINT chk_qty   CHECK (quantity >= 0),
+    PRIMARY KEY (prod_id)
+);
+```
+
+#### EXPLAIN ANALYZE（执行计划分析）
+
+```sql
+-- MySQL 8.0.18+ 支持 EXPLAIN ANALYZE，实际执行并显示真实耗时
+EXPLAIN ANALYZE
+SELECT c.cust_name, COUNT(o.order_num) AS orders
+FROM customers c
+LEFT JOIN orders o ON c.cust_id = o.cust_id
+GROUP BY c.cust_id;
+```
+
+#### 不可见索引（Invisible Index）
+
+```sql
+-- 创建不可见索引（优化器忽略，可用于测试删除索引的影响）
+ALTER TABLE products ALTER INDEX idx_vend_id INVISIBLE;
+ALTER TABLE products ALTER INDEX idx_vend_id VISIBLE;
+```
+
+---
+
 ## 第30章 改善性能
 
 - 首先，MySQL（与所有DBMS一样）具有特定的硬件建议。在学习和研究MySQL时，使用任何旧的计算机作为服务器都可以。但对用于生产的服务器来说，应该坚持遵循这些硬件建议。
