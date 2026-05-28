@@ -2,6 +2,25 @@
 
 Personal SQL reference notes covering PostgreSQL and MySQL.
 
+## Contents
+
+- [PostgreSQL](#postgresql)
+  - [Quick Start](#quick-start--local-practice-environment)
+  - [Chinook Database Schema](#chinook-database-schema)
+  - [Reference Notes](#reference-notes)
+    - [01 — Connection & Databases](postgresql/01_基础连接与数据库.md)
+    - [02 — Data Types](postgresql/02_数据类型.md)
+    - [03 — Basic Queries](postgresql/03_基础查询.md)
+    - [04 — Advanced Queries](postgresql/04_高级查询.md)
+    - [05 — DDL](postgresql/05_DDL表操作.md)
+    - [06 — Views & Indexes](postgresql/06_视图与索引.md)
+    - [07 — Functions & Procedures](postgresql/07_函数与存储过程.md)
+    - [08 — Transactions](postgresql/08_事务.md)
+    - [09 — Users & Permissions](postgresql/09_用户与权限.md)
+    - [10 — PostgreSQL Features](postgresql/10_特色功能.md)
+    - [Practice Guide](postgresql/guide.md)
+- [MySQL](#mysql)
+
 ---
 
 ## PostgreSQL
