@@ -1,5 +1,8 @@
 # 🎵 Music Platform — SQL 练习题
 
+> **运行环境：SQLite**（`sqlite3 music.db`）
+> 注意：本文件使用 SQLite 语法。部分函数（如 `STRFTIME`、`JULIANDAY`、`||` 字符串拼接）与 PostgreSQL 不同。
+
 > 基于 `music.db`，涵盖从基础到进阶的 SQL 练习。
 > 使用 SQLite，建议用 DBeaver / VS Code SQLite 插件 / 命令行练习。
 

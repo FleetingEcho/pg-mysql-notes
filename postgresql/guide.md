@@ -1,5 +1,7 @@
 # PostgreSQL 本地练习环境搭建指南
 
+> **运行环境：PostgreSQL**（Chinook 数据库，Docker 容器）
+
 使用 **Docker + Chinook 数据库** 在本地搭建 PostgreSQL 练习环境。
 
 ## Chinook 数据库简介
@@ -419,3 +421,176 @@ erDiagram
 \e              -- 用编辑器编辑 SQL
 \q              -- 退出
 ```
+
+---
+
+### Level 5 — EXPLAIN 查询计划分析
+
+> 目标：学会用 `EXPLAIN` / `EXPLAIN ANALYZE` 读懂查询计划，发现性能瓶颈并修复。
+
+**关键字段速查：**
+
+| 字段 | 含义 | 好的信号 | 坏的信号 |
+|------|------|----------|----------|
+| `Seq Scan` | 全表扫描 | 小表 OK | 大表上应走索引 |
+| `Index Scan` | 索引扫描 | ✅ | — |
+| `Index Only Scan` | 覆盖索引（不回表） | ✅✅ | — |
+| `Hash Join` | 哈希连接 | 大表 JOIN 常见 | — |
+| `Nested Loop` | 嵌套循环 | 小结果集 | 大结果集时很慢 |
+| `rows` | 预估扫描行数 | 越少越好 | 远大于实际行数说明统计信息过期 |
+| `cost` | 启动代价..总代价 | 越小越好 | — |
+| `actual time` | 实际执行毫秒（需 ANALYZE） | — | 远大于 cost 说明问题 |
+
+---
+
+#### E1. 基线：观察无索引时的全表扫描
+
+```sql
+-- 先看没有索引时的情况
+EXPLAIN SELECT * FROM track WHERE name = 'Black Dog';
+```
+
+**预期输出关键词：** `Seq Scan on track` — 全表扫描 3503 行。
+
+```sql
+-- 加上 ANALYZE 看实际执行时间
+EXPLAIN ANALYZE SELECT * FROM track WHERE name = 'Black Dog';
+```
+
+**问题：** 为什么这里是 Seq Scan？track.name 有索引吗？
+
+---
+
+#### E2. 创建索引，对比前后
+
+```sql
+-- 创建索引
+CREATE INDEX idx_track_name ON track(name);
+
+-- 再次查看查询计划
+EXPLAIN ANALYZE SELECT * FROM track WHERE name = 'Black Dog';
+```
+
+**观察：** 输出应从 `Seq Scan` 变为 `Index Scan`。对比两次的 `actual time`。
+
+```sql
+-- 清理：练习完可以删掉（不影响后续练习）
+DROP INDEX idx_track_name;
+```
+
+---
+
+#### E3. LIKE 前缀 vs 中缀 — 索引能否命中
+
+```sql
+CREATE INDEX idx_track_name2 ON track(name);
+
+-- 前缀匹配：能走索引
+EXPLAIN ANALYZE SELECT name FROM track WHERE name LIKE 'Black%';
+
+-- 中缀匹配：走不了普通 B-Tree 索引
+EXPLAIN ANALYZE SELECT name FROM track WHERE name LIKE '%Black%';
+
+DROP INDEX idx_track_name2;
+```
+
+**观察：** 第二条查询仍为 `Seq Scan`。记住：`LIKE '%xxx%'` 必须用全文搜索或 `pg_trgm` 扩展。
+
+---
+
+#### E4. JOIN 计划分析
+
+```sql
+-- 三表 JOIN：track → album → artist
+EXPLAIN ANALYZE
+SELECT ar.name AS artist, al.title AS album, t.name AS track
+FROM track t
+JOIN album al ON t.album_id = al.album_id
+JOIN artist ar ON al.artist_id = ar.artist_id
+WHERE ar.name = 'AC/DC';
+```
+
+**观察：**
+- JOIN 类型是 `Hash Join` 还是 `Nested Loop`？为什么？
+- `ar.name = 'AC/DC'` 上有索引吗？如果没有，WHERE 过滤发生在哪一步？
+
+---
+
+#### E5. 覆盖索引（Index Only Scan）
+
+```sql
+-- 创建覆盖索引：查询只需要 name 和 unit_price 两列
+CREATE INDEX idx_track_name_price ON track(name, unit_price);
+
+-- 查询只用到这两列 → Index Only Scan（不回表）
+EXPLAIN ANALYZE
+SELECT name, unit_price FROM track WHERE name LIKE 'B%';
+
+-- 加入不在索引里的列 → 退化为 Index Scan（需回表）
+EXPLAIN ANALYZE
+SELECT name, unit_price, milliseconds FROM track WHERE name LIKE 'B%';
+
+DROP INDEX idx_track_name_price;
+```
+
+**观察：** 第一条出现 `Index Only Scan`；第二条因为要取 `milliseconds` 必须回表，退化为 `Index Scan`。
+
+---
+
+#### E6. 聚合查询计划
+
+```sql
+-- 按 genre 统计曲目数量
+EXPLAIN ANALYZE
+SELECT g.name, COUNT(t.track_id)
+FROM genre g
+LEFT JOIN track t ON g.genre_id = t.genre_id
+GROUP BY g.name
+ORDER BY COUNT(t.track_id) DESC;
+```
+
+**观察：** 注意 `HashAggregate` 节点——GROUP BY 通常用哈希聚合实现。`Sort` 节点对应 ORDER BY。
+
+---
+
+#### E7. 子查询 vs CTE 的计划差异
+
+```sql
+-- 子查询版本
+EXPLAIN ANALYZE
+SELECT c.first_name, c.last_name
+FROM customer c
+WHERE c.customer_id IN (
+    SELECT i.customer_id FROM invoice i WHERE i.total > 20
+);
+
+-- CTE 版本
+EXPLAIN ANALYZE
+WITH big_invoices AS (
+    SELECT customer_id FROM invoice WHERE total > 20
+)
+SELECT c.first_name, c.last_name
+FROM customer c
+JOIN big_invoices b ON c.customer_id = b.customer_id;
+```
+
+**观察：** PostgreSQL 12+ 通常会把简单 CTE 内联优化（inline），两者计划可能相同。注意 `Subquery Scan` 节点是否出现。
+
+---
+
+#### E8. 大分页的代价
+
+```sql
+-- 传统 OFFSET 分页：OFFSET 越大越慢
+EXPLAIN ANALYZE
+SELECT track_id, name FROM track ORDER BY track_id LIMIT 20 OFFSET 3000;
+
+-- 游标分页（Keyset）：永远只扫描目标附近的行
+EXPLAIN ANALYZE
+SELECT track_id, name FROM track
+WHERE track_id > 3000
+ORDER BY track_id
+LIMIT 20;
+```
+
+**观察：** OFFSET 版本需要扫描前 3020 行再丢弃；游标版本直接定位到 `track_id > 3000`，rows 估算应远小于前者。

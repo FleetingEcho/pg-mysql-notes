@@ -1,5 +1,7 @@
 # SQL 面试知识整理
 
+> **说明：** 代码示例以通用 SQL / SQLite 为主；PostgreSQL 特有语法会单独标注。
+
 > 涵盖分库分表、性能优化、常见面试题、数据库理论等进阶内容。
 
 ---
@@ -388,6 +390,7 @@ SELECT DISTINCT plays FROM (
 ```sql
 -- 题目：找出连续 3 天都有听歌记录的用户
 
+-- SQLite 版本
 WITH user_dates AS (
     SELECT DISTINCT user_id, DATE(listened_at) AS listen_date
     FROM listening_history
@@ -396,10 +399,37 @@ date_rank AS (
     SELECT user_id, listen_date,
         ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY listen_date) AS rn
     FROM user_dates
+),
+groups AS (
+    SELECT user_id, listen_date,
+        DATE(listen_date, '-' || (rn - 1) || ' days') AS grp
+    FROM date_rank
 )
 SELECT DISTINCT user_id
-FROM date_rank
-GROUP BY user_id, DATE(listen_date, '-' || rn || ' days')
+FROM groups
+GROUP BY user_id, grp
+HAVING COUNT(*) >= 3;
+```
+
+```sql
+-- PostgreSQL 版本
+WITH user_dates AS (
+    SELECT DISTINCT user_id, listened_at::DATE AS listen_date
+    FROM listening_history
+),
+date_rank AS (
+    SELECT user_id, listen_date,
+        ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY listen_date) AS rn
+    FROM user_dates
+),
+groups AS (
+    SELECT user_id, listen_date,
+        listen_date - (rn - 1) * INTERVAL '1 day' AS grp
+    FROM date_rank
+)
+SELECT DISTINCT user_id
+FROM groups
+GROUP BY user_id, grp
 HAVING COUNT(*) >= 3;
 ```
 
